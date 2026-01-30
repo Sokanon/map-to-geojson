@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import ReactCrop, { Crop, PixelCrop } from 'react-image-crop';
+import ReactCrop, { Crop, PixelCrop, PercentCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { CropArea } from '../types';
 
@@ -24,8 +24,8 @@ function CropTool({ imageData, crop, onCropChange }: CropToolProps) {
   );
 
   const handleCropChange = useCallback(
-    (_crop: Crop, pixelCrop: PixelCrop) => {
-      setReactCrop(_crop);
+    (pixelCrop: PixelCrop, _percentCrop: PercentCrop) => {
+      setReactCrop(pixelCrop);
 
       if (pixelCrop.width > 0 && pixelCrop.height > 0) {
         onCropChange({

@@ -8,7 +8,7 @@ interface MapPreviewProps {
   selectedFeatures: string[];
   onFeatureSelect: (zoneId: string, multiSelect: boolean) => void;
   onFeatureDelete: (zoneIds: string[]) => void;
-  onFeatureUpdate: (zoneId: string, geometry: GeoJSONFeature['geometry']) => void;
+  onFeatureUpdate?: (zoneId: string, geometry: GeoJSONFeature['geometry']) => void;
   onNewPolygon: (geometry: GeoJSONFeature['geometry']) => void;
 }
 
@@ -17,7 +17,6 @@ function MapPreview({
   selectedFeatures,
   onFeatureSelect,
   onFeatureDelete,
-  onFeatureUpdate,
   onNewPolygon,
 }: MapPreviewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -95,7 +94,11 @@ function MapPreview({
         marker: false,
         circlemarker: false,
       },
-      edit: false,
+      edit: {
+        featureGroup: drawnItems,
+        remove: false,
+        edit: false,
+      },
     });
 
     map.addControl(drawControl);
