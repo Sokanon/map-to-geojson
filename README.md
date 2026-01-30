@@ -14,13 +14,23 @@ A tool for converting static masterplan map images into vector polygons (GeoJSON
 
 ## Quick Start
 
-### Prerequisites
+### Option 1: Docker (Recommended)
+
+```bash
+docker-compose up --build
+```
+
+The application will be available at `http://localhost:3000`
+
+### Option 2: Manual Setup
+
+#### Prerequisites
 
 - Python 3.9+
 - Node.js 18+
-- npm or yarn
+- pip and npm
 
-### Backend Setup
+#### Backend Setup
 
 ```bash
 cd backend
@@ -30,7 +40,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### Frontend Setup
+#### Frontend Setup
 
 ```bash
 cd frontend
