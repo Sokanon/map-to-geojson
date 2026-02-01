@@ -1,29 +1,25 @@
 import { useCallback, useRef, useState } from 'react';
+import { useDigitizerStore } from '../stores/digitizerStore';
 
-interface ImageUploadProps {
-  onUpload: (imageData: string, width: number, height: number) => void;
-  disabled?: boolean;
-}
-
-function ImageUpload({ onUpload, disabled }: ImageUploadProps) {
+function ImageUpload() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const { setImage, imageData } = useDigitizerStore();
 
   const processFile = useCallback(
     async (file: File) => {
-      // For local files, read directly
       const reader = new FileReader();
       reader.onload = (e) => {
         const result = e.target?.result as string;
         const img = new Image();
         img.onload = () => {
-          onUpload(result, img.width, img.height);
+          setImage(result, img.width, img.height);
         };
         img.src = result;
       };
       reader.readAsDataURL(file);
     },
-    [onUpload]
+    [setImage]
   );
 
   const handleFileChange = useCallback(
@@ -62,6 +58,24 @@ function ImageUpload({ onUpload, disabled }: ImageUploadProps) {
     fileInputRef.current?.click();
   }, []);
 
+  // If image is already loaded, show a compact version
+  if (imageData) {
+    return (
+      <div className="image-upload-compact">
+        <button className="btn btn-secondary btn-full" onClick={handleClick}>
+          Change Image
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="file-input"
+          accept="image/png,image/jpeg,image/jpg"
+          onChange={handleFileChange}
+        />
+      </div>
+    );
+  }
+
   return (
     <>
       <div
@@ -81,18 +95,15 @@ function ImageUpload({ onUpload, disabled }: ImageUploadProps) {
         >
           <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
         </svg>
-        <p>Drop image here or click to browse</p>
-        <p style={{ fontSize: '0.7rem', color: '#666' }}>
-          Supports PNG, JPG, PDF
-        </p>
+        <p>Drop map image here or click to browse</p>
+        <p style={{ fontSize: '0.7rem', color: '#666' }}>Supports PNG, JPG</p>
       </div>
       <input
         ref={fileInputRef}
         type="file"
         className="file-input"
-        accept="image/png,image/jpeg,image/jpg,application/pdf"
+        accept="image/png,image/jpeg,image/jpg"
         onChange={handleFileChange}
-        disabled={disabled}
       />
     </>
   );

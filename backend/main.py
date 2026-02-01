@@ -3,6 +3,10 @@ Map Image to GeoJSON/TopoJSON Converter - Backend API
 Handles image processing and polygon extraction
 """
 
+# Load environment variables from .env file before any other imports
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,6 +21,14 @@ from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
 from scipy import ndimage
 import json
+
+from magic_wand import magic_wand_select, mask_to_polygon, refine_mask
+from ocr_service import (
+    extract_text_from_polygon,
+    extract_text_with_gemini,
+    is_tesseract_available,
+    is_gemini_available,
+)
 
 app = FastAPI(title="Map to GeoJSON Converter")
 
@@ -65,6 +77,30 @@ class ProcessRequest(BaseModel):
     settings: ExtractionSettings = ExtractionSettings()
     control_points: Optional[List[GeoreferencePoint]] = None
     bounding_box: Optional[BoundingBox] = None
+
+
+class MagicWandRequest(BaseModel):
+    image_data: str  # Base64 encoded image
+    click_x: int  # X coordinate of click
+    click_y: int  # Y coordinate of click
+    use_boundary_mode: bool = True  # True = boundary color mode, False = tolerance mode
+    boundary_color: List[int] = [152, 152, 152]  # RGB boundary color (default #989898)
+    boundary_tolerance: int = 15  # How close to boundary color to be considered boundary
+    tolerance: int = 32  # Color tolerance for non-boundary mode
+    simplify_tolerance: float = 2.0  # Douglas-Peucker simplification
+    ocr_engine: str = "ai"  # "ai" or "tesseract"
+    ai_model: str = "google/gemini-2.0-flash-001"  # AI model to use when ocr_engine is "ai"
+
+
+class MagicWandResponse(BaseModel):
+    success: bool
+    polygon: Optional[List[List[List[float]]]] = None  # GeoJSON polygon coords
+    centroid: Optional[List[float]] = None
+    bbox: Optional[dict] = None
+    ocr_text: str = ""
+    ocr_confidence: float = 0.0
+    area: float = 0.0
+    error: Optional[str] = None
 
 
 def decode_image(base64_data: str) -> np.ndarray:
@@ -425,9 +461,94 @@ async def upload_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/magic-wand")
+async def magic_wand(request: MagicWandRequest):
+    """
+    Magic wand selection endpoint.
+    Click on the image to select a region using flood fill.
+    Returns polygon coordinates and OCR text from the selected region.
+    """
+    try:
+        # Decode image
+        img = decode_image(request.image_data)
+
+        # Perform magic wand selection
+        boundary_color = tuple(request.boundary_color[:3])  # Ensure RGB tuple
+        mask, bbox = magic_wand_select(
+            img,
+            request.click_x,
+            request.click_y,
+            use_boundary_mode=request.use_boundary_mode,
+            boundary_color=boundary_color,
+            boundary_tolerance=request.boundary_tolerance,
+            tolerance=request.tolerance
+        )
+
+        # Refine the mask
+        refined_mask = refine_mask(mask)
+
+        # Convert mask to polygon
+        result = mask_to_polygon(refined_mask, request.simplify_tolerance)
+
+        if result is None:
+            return MagicWandResponse(
+                success=False,
+                error="No valid region selected. Try adjusting tolerance or clicking elsewhere."
+            )
+
+        # Extract text from inside the polygon using OCR
+        ocr_text = ""
+        ocr_confidence = 0.0
+
+        if bbox["width"] > 0 and bbox["height"] > 0:
+            # Get polygon coordinates (first ring, without closing point)
+            polygon_coords = result["polygon"][0][:-1] if result["polygon"][0] else []
+
+            # Use the selected OCR engine
+            if request.ocr_engine == "ai" and is_gemini_available():
+                ocr_text, ocr_confidence = extract_text_with_gemini(
+                    img, refined_mask, polygon_coords, model=request.ai_model
+                )
+            elif request.ocr_engine == "tesseract" and is_tesseract_available():
+                ocr_text, ocr_confidence = extract_text_from_polygon(
+                    img, refined_mask, polygon_coords
+                )
+
+            # Fall back to other engine if selected one failed or unavailable
+            if not ocr_text:
+                if request.ocr_engine == "ai" and is_tesseract_available():
+                    ocr_text, ocr_confidence = extract_text_from_polygon(
+                        img, refined_mask, polygon_coords
+                    )
+                elif request.ocr_engine == "tesseract" and is_gemini_available():
+                    ocr_text, ocr_confidence = extract_text_with_gemini(
+                        img, refined_mask, polygon_coords, model=request.ai_model
+                    )
+
+        return MagicWandResponse(
+            success=True,
+            polygon=result["polygon"],
+            centroid=result["centroid"],
+            bbox=bbox,
+            ocr_text=ocr_text,
+            ocr_confidence=ocr_confidence,
+            area=result["area"]
+        )
+
+    except ValueError as e:
+        return MagicWandResponse(success=False, error=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy"}
+    return {
+        "status": "healthy",
+        "ocr_available": is_tesseract_available() or is_gemini_available(),
+        "tesseract_available": is_tesseract_available(),
+        "gemini_available": is_gemini_available(),
+    }
 
 
 if __name__ == "__main__":

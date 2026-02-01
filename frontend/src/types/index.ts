@@ -1,3 +1,46 @@
+// Smart Map Digitizer Types
+
+export interface Building {
+  id: number;
+  label: string;
+  polygon: number[][][]; // GeoJSON polygon coordinates
+  centroid: [number, number];
+  loading?: boolean; // True while API call is in progress
+  clickPosition?: [number, number]; // Where user clicked (for loading indicator)
+}
+
+export interface PendingSelection {
+  polygon: number[][][];
+  bbox: { x: number; y: number; width: number; height: number };
+  ocrText: string;
+  confidence: number;
+  centroid: [number, number];
+}
+
+export interface DigitizerState {
+  imageData: string | null;
+  imageWidth: number;
+  imageHeight: number;
+  tolerance: number;
+  pendingSelection: PendingSelection | null;
+  buildings: Building[];
+  nextId: number;
+  isLoading: boolean;
+  highlightedBuildingId: number | null;
+}
+
+export interface MagicWandResponse {
+  success: boolean;
+  polygon?: number[][][];
+  centroid?: [number, number];
+  bbox?: { x: number; y: number; width: number; height: number };
+  ocr_text: string;
+  ocr_confidence: number;
+  area: number;
+  error?: string;
+}
+
+// Keep legacy types for backward compatibility with existing components
 export interface CropArea {
   x: number;
   y: number;
