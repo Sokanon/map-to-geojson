@@ -1,9 +1,9 @@
 import * as topojson from 'topojson-server';
-import { Building } from '../types';
+import { Unit } from '../types';
 
 interface GeoJSONFeature {
   type: 'Feature';
-  properties: { id: number; building: string };
+  properties: { unit_id: number; name: string };
   geometry: { type: 'Polygon'; coordinates: number[][][] };
 }
 
@@ -12,25 +12,25 @@ interface GeoJSONFeatureCollection {
   features: GeoJSONFeature[];
 }
 
-export function buildingsToGeoJSON(buildings: Building[]): GeoJSONFeatureCollection {
+export function unitsToGeoJSON(units: Unit[]): GeoJSONFeatureCollection {
   return {
     type: 'FeatureCollection',
-    features: buildings.map((b) => ({
+    features: units.map((u) => ({
       type: 'Feature' as const,
-      properties: { id: b.id, building: b.label },
-      geometry: { type: 'Polygon' as const, coordinates: b.polygon },
+      properties: { unit_id: u.id, name: u.label },
+      geometry: { type: 'Polygon' as const, coordinates: u.polygon },
     })),
   };
 }
 
-export function exportToTopoJSON(buildings: Building[]): string {
-  const geojson = buildingsToGeoJSON(buildings);
-  const topo = topojson.topology({ buildings: geojson });
+export function exportToTopoJSON(units: Unit[]): string {
+  const geojson = unitsToGeoJSON(units);
+  const topo = topojson.topology({ units: geojson });
   return JSON.stringify(topo, null, 2);
 }
 
-export function exportToGeoJSON(buildings: Building[]): string {
-  const geojson = buildingsToGeoJSON(buildings);
+export function exportToGeoJSON(units: Unit[]): string {
+  const geojson = unitsToGeoJSON(units);
   return JSON.stringify(geojson, null, 2);
 }
 

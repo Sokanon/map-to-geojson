@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Building } from '../types';
+import { Unit } from '../types';
 
 interface DigitizerState {
   imageData: string | null;
@@ -11,9 +11,9 @@ interface DigitizerState {
   tolerance: number; // For non-boundary mode
   ocrEngine: 'tesseract' | 'ai';
   aiModel: string;
-  buildings: Building[];
+  units: Unit[];
   nextId: number;
-  highlightedBuildingId: number | null;
+  highlightedUnitId: number | null;
 }
 
 interface DigitizerActions {
@@ -24,17 +24,17 @@ interface DigitizerActions {
   setTolerance: (tolerance: number) => void;
   setOcrEngine: (engine: 'tesseract' | 'ai') => void;
   setAiModel: (model: string) => void;
-  addLoadingBuilding: (clickX: number, clickY: number) => number; // Returns the ID of the new loading building
-  updateBuildingFromResponse: (id: number, data: {
+  addLoadingUnit: (clickX: number, clickY: number) => number;
+  updateUnitFromResponse: (id: number, data: {
     label: string;
     polygon: number[][][];
     centroid: [number, number];
   }) => void;
-  removeBuilding: (id: number) => void;
-  updateBuilding: (id: number, updates: Partial<Building>) => void;
+  removeUnit: (id: number) => void;
+  updateUnit: (id: number, updates: Partial<Unit>) => void;
   updateLabel: (id: number, label: string) => void;
-  setHighlightedBuilding: (id: number | null) => void;
-  importBuildings: (buildings: Building[]) => void;
+  setHighlightedUnit: (id: number | null) => void;
+  importUnits: (units: Unit[]) => void;
   clearAll: () => void;
   reset: () => void;
 }
@@ -49,9 +49,9 @@ const initialState: DigitizerState = {
   tolerance: 32,
   ocrEngine: 'ai',
   aiModel: 'google/gemini-2.0-flash-001',
-  buildings: [],
+  units: [],
   nextId: 1,
-  highlightedBuildingId: null,
+  highlightedUnitId: null,
 };
 
 export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set, get) => ({
@@ -62,7 +62,7 @@ export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set,
       imageData,
       imageWidth: width,
       imageHeight: height,
-      buildings: [],
+      units: [],
       nextId: 1,
     });
   },
@@ -91,10 +91,10 @@ export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set,
     set({ aiModel: model });
   },
 
-  addLoadingBuilding: (clickX: number, clickY: number) => {
-    const { nextId, buildings } = get();
+  addLoadingUnit: (clickX: number, clickY: number) => {
+    const { nextId, units } = get();
 
-    const loadingBuilding: Building = {
+    const loadingUnit: Unit = {
       id: nextId,
       label: 'Loading...',
       polygon: [],
@@ -104,71 +104,71 @@ export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set,
     };
 
     set({
-      buildings: [...buildings, loadingBuilding],
+      units: [...units, loadingUnit],
       nextId: nextId + 1,
     });
 
     return nextId;
   },
 
-  updateBuildingFromResponse: (id: number, data: {
+  updateUnitFromResponse: (id: number, data: {
     label: string;
     polygon: number[][][];
     centroid: [number, number];
   }) => {
     set((state) => ({
-      buildings: state.buildings.map((b) =>
-        b.id === id
-          ? { ...b, ...data, label: data.label.trim(), loading: false }
-          : b
+      units: state.units.map((u) =>
+        u.id === id
+          ? { ...u, ...data, label: data.label.trim(), loading: false }
+          : u
       ),
     }));
   },
 
-  removeBuilding: (id: number) => {
+  removeUnit: (id: number) => {
     set((state) => ({
-      buildings: state.buildings.filter((b) => b.id !== id),
+      units: state.units.filter((u) => u.id !== id),
     }));
   },
 
-  updateBuilding: (id: number, updates: Partial<Building>) => {
+  updateUnit: (id: number, updates: Partial<Unit>) => {
     set((state) => ({
-      buildings: state.buildings.map((b) =>
-        b.id === id ? { ...b, ...updates } : b
+      units: state.units.map((u) =>
+        u.id === id ? { ...u, ...updates } : u
       ),
     }));
   },
 
   updateLabel: (id: number, label: string) => {
     set((state) => ({
-      buildings: state.buildings.map((b) =>
-        b.id === id ? { ...b, label: label.trim() } : b
+      units: state.units.map((u) =>
+        u.id === id ? { ...u, label: label.trim() } : u
       ),
     }));
   },
 
-  setHighlightedBuilding: (id: number | null) => {
-    set({ highlightedBuildingId: id });
+  setHighlightedUnit: (id: number | null) => {
+    set({ highlightedUnitId: id });
   },
 
-  importBuildings: (importedBuildings: Building[]) => {
-    const { buildings, nextId } = get();
-    // Assign new IDs to imported buildings starting from nextId
-    const newBuildings = importedBuildings.map((b, index) => ({
-      ...b,
+  importUnits: (importedUnits: Unit[]) => {
+    const { units, nextId } = get();
+    // Assign new IDs to imported units starting from nextId
+    const newUnits = importedUnits.map((u, index) => ({
+      ...u,
       id: nextId + index,
-      label: b.label.trim(),
+      label: u.label.trim(),
       loading: false,
     }));
     set({
-      buildings: [...buildings, ...newBuildings],
-      nextId: nextId + importedBuildings.length,
+      units: [...units, ...newUnits],
+      nextId: nextId + importedUnits.length,
     });
   },
 
   clearAll: () => {
     set({
-      buildings: [],
+      units: [],
       nextId: 1,
     });
   },

@@ -1,7 +1,20 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { ZoomIn, ZoomOut, RotateCcw, Upload } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { useDigitizerStore } from '../stores/digitizerStore';
 import { magicWandSelect } from '../api/digitizer';
-import { Building } from '../types';
+import { Unit } from '../types';
 
 // Point-in-polygon test using ray casting algorithm
 function pointInPolygon(x: number, y: number, polygon: number[][]): boolean {
@@ -28,17 +41,16 @@ function ImageCanvas() {
   const panStart = useRef({ x: 0, y: 0 });
 
   // Edit mode state
-  const [editingBuildingId, setEditingBuildingId] = useState<number | null>(null);
+  const [editingUnitId, setEditingUnitId] = useState<number | null>(null);
   const [editingVertices, setEditingVertices] = useState<number[][]>([]);
   const [draggingVertex, setDraggingVertex] = useState<number | null>(null);
 
-  // Building info dialog state
-  const [selectedBuilding, setSelectedBuilding] = useState<Building | null>(null);
-  const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
+  // Unit info dialog state
+  const [selectedUnit, setSelectedUnit] = useState<Unit | null>(null);
   const [dialogLabel, setDialogLabel] = useState('');
 
   // Hover state for cursor
-  const [isHoveringBuilding, setIsHoveringBuilding] = useState(false);
+  const [isHoveringUnit, setIsHoveringUnit] = useState(false);
 
   // Pulse animation for loading indicators
   const [pulsePhase, setPulsePhase] = useState(0);
@@ -51,12 +63,12 @@ function ImageCanvas() {
     tolerance,
     ocrEngine,
     aiModel,
-    buildings,
-    highlightedBuildingId,
-    addLoadingBuilding,
-    updateBuildingFromResponse,
-    removeBuilding,
-    updateBuilding,
+    units,
+    highlightedUnitId,
+    addLoadingUnit,
+    updateUnitFromResponse,
+    removeUnit,
+    updateUnit,
   } = useDigitizerStore();
 
   // Draw the canvas
@@ -71,15 +83,15 @@ function ImageCanvas() {
     // Draw image
     ctx.drawImage(imageRef.current, 0, 0);
 
-    // Draw existing buildings
-    buildings.forEach((building) => {
-      const isHighlighted = building.id === highlightedBuildingId;
-      const isEditing = building.id === editingBuildingId;
+    // Draw existing units
+    units.forEach((unit) => {
+      const isHighlighted = unit.id === highlightedUnitId;
+      const isEditing = unit.id === editingUnitId;
 
       if (isEditing) return; // Don't draw the original when editing
 
       ctx.beginPath();
-      const ring = building.polygon[0];
+      const ring = unit.polygon[0];
       if (ring && ring.length > 0) {
         ctx.moveTo(ring[0][0], ring[0][1]);
         for (let i = 1; i < ring.length; i++) {
@@ -95,20 +107,20 @@ function ImageCanvas() {
       ctx.lineWidth = isHighlighted ? 3 : 2;
       ctx.stroke();
 
-      // Draw label at centroid (skip for loading buildings)
-      if (!building.loading) {
+      // Draw label at centroid (skip for loading units)
+      if (!unit.loading) {
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 12px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(building.label, building.centroid[0], building.centroid[1]);
+        ctx.fillText(unit.label, unit.centroid[0], unit.centroid[1]);
       }
     });
 
     // Draw loading indicators at click positions
-    buildings.forEach((building) => {
-      if (building.loading && building.clickPosition) {
-        const [cx, cy] = building.clickPosition;
+    units.forEach((unit) => {
+      if (unit.loading && unit.clickPosition) {
+        const [cx, cy] = unit.clickPosition;
         const pulse = Math.sin(pulsePhase * 0.15) * 0.5 + 0.5; // 0 to 1
         const radius = 8 + pulse * 12; // 8 to 20px
         const alpha = 0.8 - pulse * 0.4; // 0.8 to 0.4
@@ -132,7 +144,7 @@ function ImageCanvas() {
     });
 
     // Draw editing polygon with vertex handles
-    if (editingBuildingId !== null && editingVertices.length > 0) {
+    if (editingUnitId !== null && editingVertices.length > 0) {
       ctx.beginPath();
       ctx.moveTo(editingVertices[0][0], editingVertices[0][1]);
       for (let i = 1; i < editingVertices.length; i++) {
@@ -156,7 +168,7 @@ function ImageCanvas() {
         ctx.stroke();
       });
     }
-  }, [buildings, highlightedBuildingId, editingBuildingId, editingVertices, draggingVertex, pulsePhase]);
+  }, [units, highlightedUnitId, editingUnitId, editingVertices, draggingVertex, pulsePhase]);
 
   // Load image and setup canvas
   useEffect(() => {
@@ -184,18 +196,18 @@ function ImageCanvas() {
   useEffect(() => {
     setZoom(1);
     setOffset({ x: 0, y: 0 });
-    setEditingBuildingId(null);
+    setEditingUnitId(null);
   }, [imageData]);
 
   // Animate pulse for loading indicators
-  const hasLoadingBuildings = buildings.some(b => b.loading);
+  const hasLoadingUnits = units.some(u => u.loading);
   useEffect(() => {
-    if (!hasLoadingBuildings) return;
+    if (!hasLoadingUnits) return;
     const interval = setInterval(() => {
       setPulsePhase(p => (p + 1) % 60);
     }, 33); // ~30fps
     return () => clearInterval(interval);
-  }, [hasLoadingBuildings]);
+  }, [hasLoadingUnits]);
 
   // Handle mouse wheel zoom - always zoom, no modifier needed
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -239,19 +251,19 @@ function ImageCanvas() {
     return -1;
   }, [editingVertices, zoom]);
 
-  // Find building at point
-  const findBuildingAtPoint = useCallback((x: number, y: number): Building | null => {
-    // Check buildings in reverse order (most recently added first, drawn on top)
-    for (let i = buildings.length - 1; i >= 0; i--) {
-      const building = buildings[i];
-      if (building.loading) continue;
-      const ring = building.polygon[0];
+  // Find unit at point
+  const findUnitAtPoint = useCallback((x: number, y: number): Unit | null => {
+    // Check units in reverse order (most recently added first, drawn on top)
+    for (let i = units.length - 1; i >= 0; i--) {
+      const unit = units[i];
+      if (unit.loading) continue;
+      const ring = unit.polygon[0];
       if (ring && pointInPolygon(x, y, ring)) {
-        return building;
+        return unit;
       }
     }
     return null;
-  }, [buildings]);
+  }, [units]);
 
   // Handle mouse down
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -264,7 +276,7 @@ function ImageCanvas() {
     }
 
     // Left click while editing - check for vertex drag
-    if (e.button === 0 && editingBuildingId !== null) {
+    if (e.button === 0 && editingUnitId !== null) {
       const coords = getCanvasCoords(e);
       if (coords) {
         const vertexIndex = findVertexNear(coords.x, coords.y);
@@ -274,7 +286,7 @@ function ImageCanvas() {
         }
       }
     }
-  }, [offset, editingBuildingId, getCanvasCoords, findVertexNear]);
+  }, [offset, editingUnitId, getCanvasCoords, findVertexNear]);
 
   // Handle mouse move
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
@@ -299,15 +311,15 @@ function ImageCanvas() {
       return;
     }
 
-    // Check if hovering over a building (only when not editing)
-    if (editingBuildingId === null) {
+    // Check if hovering over a unit (only when not editing)
+    if (editingUnitId === null) {
       const coords = getCanvasCoords(e);
       if (coords) {
-        const hoveredBuilding = findBuildingAtPoint(coords.x, coords.y);
-        setIsHoveringBuilding(hoveredBuilding !== null);
+        const hoveredUnit = findUnitAtPoint(coords.x, coords.y);
+        setIsHoveringUnit(hoveredUnit !== null);
       }
     }
-  }, [isPanning, draggingVertex, editingBuildingId, getCanvasCoords, findBuildingAtPoint]);
+  }, [isPanning, draggingVertex, editingUnitId, getCanvasCoords, findUnitAtPoint]);
 
   // Handle mouse up
   const handleMouseUp = useCallback(() => {
@@ -319,7 +331,7 @@ function ImageCanvas() {
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
     setDraggingVertex(null);
-    setIsHoveringBuilding(false);
+    setIsHoveringUnit(false);
   }, []);
 
   // Prevent context menu
@@ -327,11 +339,11 @@ function ImageCanvas() {
     e.preventDefault();
   }, []);
 
-  // Handle click for magic wand selection or building selection
+  // Handle click for magic wand selection or unit selection
   const handleClick = useCallback(
     async (e: React.MouseEvent<HTMLCanvasElement>) => {
       // Skip if not left click, or if we're editing vertices
-      if (e.button !== 0 || !imageData || editingBuildingId !== null) return;
+      if (e.button !== 0 || !imageData || editingUnitId !== null) return;
 
       const coords = getCanvasCoords(e);
       if (!coords) return;
@@ -339,18 +351,17 @@ function ImageCanvas() {
       // Don't trigger if clicking on a vertex handle area
       if (editingVertices.length > 0 && findVertexNear(coords.x, coords.y) >= 0) return;
 
-      // Check if we clicked on an existing building
-      const clickedBuilding = findBuildingAtPoint(coords.x, coords.y);
-      if (clickedBuilding) {
-        // Open dialog for this building
-        setSelectedBuilding(clickedBuilding);
-        setDialogLabel(clickedBuilding.label);
-        setDialogPosition({ x: e.clientX, y: e.clientY });
+      // Check if we clicked on an existing unit
+      const clickedUnit = findUnitAtPoint(coords.x, coords.y);
+      if (clickedUnit) {
+        // Open dialog for this unit
+        setSelectedUnit(clickedUnit);
+        setDialogLabel(clickedUnit.label);
         return;
       }
 
-      // Add a loading building immediately with click position for visual feedback
-      const buildingId = addLoadingBuilding(coords.x, coords.y);
+      // Add a loading unit immediately with click position for visual feedback
+      const unitId = addLoadingUnit(coords.x, coords.y);
 
       try {
         const response = await magicWandSelect(imageData, coords.x, coords.y, {
@@ -363,41 +374,44 @@ function ImageCanvas() {
         });
 
         if (response.success && response.polygon && response.centroid && response.bbox) {
-          // Update the loading building with actual data
-          updateBuildingFromResponse(buildingId, {
-            label: response.ocr_text || `Building ${buildingId}`,
+          // Update the loading unit with actual data
+          const label = response.ocr_text || `Unit ${unitId}`;
+          updateUnitFromResponse(unitId, {
+            label,
             polygon: response.polygon,
             centroid: response.centroid,
           });
+          toast.success('Unit added', { description: label });
         } else {
-          // Remove the loading building if selection failed
-          removeBuilding(buildingId);
-          console.warn('Selection failed:', response.error);
+          // Remove the loading unit if selection failed
+          removeUnit(unitId);
+          toast.error('Selection failed', { description: response.error || 'No region found at this location' });
         }
       } catch (error) {
-        // Remove the loading building on error
-        removeBuilding(buildingId);
+        // Remove the loading unit on error
+        removeUnit(unitId);
+        toast.error('Selection failed', { description: 'Could not connect to the server' });
         console.error('Magic wand error:', error);
       }
     },
-    [imageData, useBoundaryMode, boundaryColor, boundaryTolerance, tolerance, ocrEngine, aiModel, editingBuildingId, editingVertices, getCanvasCoords, findVertexNear, findBuildingAtPoint, addLoadingBuilding, updateBuildingFromResponse, removeBuilding]
+    [imageData, useBoundaryMode, boundaryColor, boundaryTolerance, tolerance, ocrEngine, aiModel, editingUnitId, editingVertices, getCanvasCoords, findVertexNear, findUnitAtPoint, addLoadingUnit, updateUnitFromResponse, removeUnit]
   );
 
-  // Start editing a building
-  const startEditing = useCallback((buildingId: number) => {
-    const building = buildings.find(b => b.id === buildingId);
-    if (building && building.polygon[0]) {
+  // Start editing a unit
+  const startEditing = useCallback((unitId: number) => {
+    const unit = units.find(u => u.id === unitId);
+    if (unit && unit.polygon[0]) {
       // Remove closing point if present (same as first)
-      const ring = building.polygon[0];
+      const ring = unit.polygon[0];
       const vertices = ring.slice(0, -1).map(v => [...v]);
       setEditingVertices(vertices);
-      setEditingBuildingId(buildingId);
+      setEditingUnitId(unitId);
     }
-  }, [buildings]);
+  }, [units]);
 
   // Save edited polygon
   const saveEditing = useCallback(() => {
-    if (editingBuildingId === null) return;
+    if (editingUnitId === null) return;
 
     // Close the polygon
     const closedVertices = [...editingVertices, editingVertices[0]];
@@ -406,71 +420,75 @@ function ImageCanvas() {
     const cx = editingVertices.reduce((sum, v) => sum + v[0], 0) / editingVertices.length;
     const cy = editingVertices.reduce((sum, v) => sum + v[1], 0) / editingVertices.length;
 
-    updateBuilding(editingBuildingId, {
+    const unit = units.find(u => u.id === editingUnitId);
+    updateUnit(editingUnitId, {
       polygon: [closedVertices],
       centroid: [cx, cy] as [number, number],
     });
 
-    setEditingBuildingId(null);
+    setEditingUnitId(null);
     setEditingVertices([]);
-  }, [editingBuildingId, editingVertices, updateBuilding]);
+    toast.success('Polygon updated', { description: unit?.label || `Unit #${editingUnitId}` });
+  }, [editingUnitId, editingVertices, units, updateUnit]);
 
   // Cancel editing
   const cancelEditing = useCallback(() => {
-    setEditingBuildingId(null);
+    setEditingUnitId(null);
     setEditingVertices([]);
   }, []);
 
   // Dialog handlers
   const handleDialogSave = useCallback(() => {
-    if (selectedBuilding) {
-      updateBuilding(selectedBuilding.id, { label: dialogLabel });
-      setSelectedBuilding(null);
+    if (selectedUnit) {
+      updateUnit(selectedUnit.id, { label: dialogLabel });
+      setSelectedUnit(null);
     }
-  }, [selectedBuilding, dialogLabel, updateBuilding]);
+  }, [selectedUnit, dialogLabel, updateUnit]);
 
   const handleDialogDelete = useCallback(() => {
-    if (selectedBuilding) {
-      removeBuilding(selectedBuilding.id);
-      setSelectedBuilding(null);
+    if (selectedUnit) {
+      const label = selectedUnit.label || `Unit #${selectedUnit.id}`;
+      removeUnit(selectedUnit.id);
+      setSelectedUnit(null);
+      toast.success('Unit deleted', { description: label });
     }
-  }, [selectedBuilding, removeBuilding]);
+  }, [selectedUnit, removeUnit]);
 
   const handleDialogClose = useCallback(() => {
-    setSelectedBuilding(null);
+    setSelectedUnit(null);
   }, []);
 
   const handleDialogEdit = useCallback(() => {
-    if (selectedBuilding) {
-      startEditing(selectedBuilding.id);
-      setSelectedBuilding(null);
+    if (selectedUnit) {
+      startEditing(selectedUnit.id);
+      setSelectedUnit(null);
     }
-  }, [selectedBuilding, startEditing]);
+  }, [selectedUnit, startEditing]);
 
-  // Focus on a building (pan and zoom to its centroid)
-  const focusOnBuilding = useCallback((buildingId: number) => {
-    const building = buildings.find(b => b.id === buildingId);
-    if (!building || !canvasRef.current) return;
+  // Focus on a unit (pan and zoom to its centroid)
+  const focusOnUnit = useCallback((unitId: number) => {
+    const unit = units.find(u => u.id === unitId);
+    if (!unit || !canvasRef.current) return;
 
-    const [cx, cy] = building.centroid;
+    const [cx, cy] = unit.centroid;
     const canvas = canvasRef.current;
 
     // Zoom in to 2x (or keep current if higher)
     const newZoom = Math.max(zoom, 2);
 
-    // Calculate offset to center the building's centroid
+    // Calculate offset to center the unit's centroid
     const offsetX = (canvas.width / 2 - cx) * newZoom;
     const offsetY = (canvas.height / 2 - cy) * newZoom;
 
     setZoom(newZoom);
     setOffset({ x: offsetX, y: offsetY });
-  }, [buildings, zoom]);
+  }, [units, zoom]);
 
-  // Expose edit functions via window for BuildingList to access
+  // Expose edit functions via window for UnitList to access
   useEffect(() => {
-    (window as any).__canvasEditFns = { startEditing, saveEditing, cancelEditing, focusOnBuilding, editingBuildingId };
+    (window as any).__canvasEditFns = { startEditing, saveEditing, cancelEditing, focusOnUnit, editingUnitId };
     return () => { delete (window as any).__canvasEditFns; };
-  }, [startEditing, saveEditing, cancelEditing, focusOnBuilding, editingBuildingId]);
+  }, [startEditing, saveEditing, cancelEditing, focusOnUnit, editingUnitId]);
 
   // Zoom controls
   const handleZoomIn = useCallback(() => {
@@ -486,15 +504,84 @@ function ImageCanvas() {
     setOffset({ x: 0, y: 0 });
   }, []);
 
+  // Upload state for drag and drop
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { setImage } = useDigitizerStore();
+
+  const processFile = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      const img = new Image();
+      img.onload = () => {
+        setImage(result, img.width, img.height);
+      };
+      img.src = result;
+    };
+    reader.readAsDataURL(file);
+  }, [setImage]);
+
+  const handleFileDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      processFile(file);
+    }
+  }, [processFile]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  }, []);
+
+  const handleUploadClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processFile(file);
+    }
+  }, [processFile]);
+
   if (!imageData) {
     return (
-      <div className="empty-state">
-        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
-          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-          <circle cx="8.5" cy="8.5" r="1.5" />
-          <polyline points="21 15 16 10 5 21" />
-        </svg>
-        <p>Upload an image to start</p>
+      <div
+        className={cn(
+          "flex flex-col items-center justify-center h-full w-full text-muted-foreground gap-6 cursor-pointer transition-all",
+          isDragging && "bg-primary/10"
+        )}
+        onClick={handleUploadClick}
+        onDrop={handleFileDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+      >
+        <div className={cn(
+          "flex flex-col items-center gap-4 p-12 rounded-xl border-2 border-dashed transition-colors",
+          isDragging ? "border-primary bg-primary/5" : "border-border"
+        )}>
+          <Upload className={cn("w-16 h-16 transition-colors", isDragging ? "text-primary" : "text-muted-foreground/50")} />
+          <div className="text-center">
+            <p className="text-lg font-medium text-foreground">Drop your map image here</p>
+            <p className="text-sm mt-1">or click to browse</p>
+            <p className="text-xs mt-3 text-muted-foreground/70">Supports PNG, JPG</p>
+          </div>
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept="image/png,image/jpeg,image/jpg"
+          onChange={handleFileInputChange}
+        />
       </div>
     );
   }
@@ -502,7 +589,7 @@ function ImageCanvas() {
   return (
     <div
       ref={containerRef}
-      className="canvas-container"
+      className="relative w-full h-full flex items-center justify-center overflow-hidden p-4"
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -513,107 +600,102 @@ function ImageCanvas() {
       <canvas
         ref={canvasRef}
         onClick={handleClick}
+        className="canvas-shadow rounded-lg transition-transform duration-100"
         style={{
           transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
           transformOrigin: 'center center',
           cursor: isPanning ? 'grabbing' :
                  draggingVertex !== null ? 'grabbing' :
-                 editingBuildingId !== null ? 'crosshair' :
-                 isHoveringBuilding ? 'pointer' :
+                 editingUnitId !== null ? 'crosshair' :
+                 isHoveringUnit ? 'pointer' :
                  'crosshair',
         }}
       />
 
       {/* Edit mode toolbar */}
-      {editingBuildingId !== null && (
-        <div className="edit-toolbar">
+      {editingUnitId !== null && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-card px-4 py-3 rounded-lg shadow-lg flex items-center gap-4 text-sm text-warning z-50 border border-border">
           <span>Editing polygon - drag vertices to adjust</span>
-          <div className="edit-toolbar-buttons">
-            <button className="btn btn-primary" onClick={saveEditing}>Save</button>
-            <button className="btn btn-secondary" onClick={cancelEditing}>Cancel</button>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={saveEditing}>Save</Button>
+            <Button size="sm" variant="secondary" onClick={cancelEditing}>Cancel</Button>
           </div>
         </div>
       )}
 
       {/* Zoom controls */}
-      <div className="zoom-controls">
-        <button className="zoom-btn" onClick={handleZoomIn} title="Zoom in">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            <line x1="11" y1="8" x2="11" y2="14" />
-            <line x1="8" y1="11" x2="14" y2="11" />
-          </svg>
-        </button>
-        <span className="zoom-level">{Math.round(zoom * 100)}%</span>
-        <button className="zoom-btn" onClick={handleZoomOut} title="Zoom out">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            <line x1="8" y1="11" x2="14" y2="11" />
-          </svg>
-        </button>
-        <button className="zoom-btn" onClick={handleZoomReset} title="Reset view">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-            <path d="M3 3v5h5" />
-          </svg>
-        </button>
+      <div className="absolute bottom-4 right-4 flex items-center gap-2 bg-card p-2 rounded-lg shadow-lg border border-border">
+        <Button
+          variant="secondary"
+          size="icon"
+          className="h-8 w-8"
+          onClick={handleZoomIn}
+          title="Zoom in"
+        >
+          <ZoomIn className="h-4 w-4" />
+        </Button>
+        <span className="text-xs text-muted-foreground min-w-10 text-center">
+          {Math.round(zoom * 100)}%
+        </span>
+        <Button
+          variant="secondary"
+          size="icon"
+          className="h-8 w-8"
+          onClick={handleZoomOut}
+          title="Zoom out"
+        >
+          <ZoomOut className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="secondary"
+          size="icon"
+          className="h-8 w-8"
+          onClick={handleZoomReset}
+          title="Reset view"
+        >
+          <RotateCcw className="h-4 w-4" />
+        </Button>
       </div>
 
       {/* Help text */}
-      <div className="canvas-help">
+      <div className="absolute bottom-4 left-4 text-[0.7rem] text-muted-foreground bg-card px-2.5 py-1.5 rounded-lg border border-border">
         Scroll to zoom | Middle-click drag to pan
       </div>
 
-      {/* Building info dialog */}
-      {selectedBuilding && (
-        <>
-          <div className="dialog-backdrop" onClick={handleDialogClose} />
-          <div
-            className="building-dialog"
-            style={{
-              left: Math.min(dialogPosition.x, window.innerWidth - 280),
-              top: Math.min(dialogPosition.y, window.innerHeight - 200),
-            }}
-          >
-            <div className="dialog-header">
-              <span>Building #{selectedBuilding.id}</span>
-              <button className="btn-icon" onClick={handleDialogClose}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
-            <div className="dialog-body">
-              <div className="input-group">
-                <label>Name</label>
-                <input
-                  type="text"
-                  value={dialogLabel}
-                  onChange={(e) => setDialogLabel(e.target.value)}
-                  placeholder="Enter building name..."
-                  autoFocus
-                />
-              </div>
-            </div>
-            <div className="dialog-footer">
-              <button className="btn btn-sm btn-delete-outline" onClick={handleDialogDelete}>
-                Delete
-              </button>
-              <div className="dialog-footer-right">
-                <button className="btn btn-sm btn-secondary" onClick={handleDialogEdit}>
-                  Edit Shape
-                </button>
-                <button className="btn btn-sm btn-primary" onClick={handleDialogSave}>
-                  Save
-                </button>
-              </div>
+      {/* Unit info dialog */}
+      <Dialog open={!!selectedUnit} onOpenChange={(open) => !open && handleDialogClose()}>
+        <DialogContent className="sm:max-w-[320px]">
+          <DialogHeader>
+            <DialogTitle>Unit #{selectedUnit?.id}</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="unitName">Name</Label>
+              <Input
+                id="unitName"
+                value={dialogLabel}
+                onChange={(e) => setDialogLabel(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleDialogSave()}
+                placeholder="Enter unit name..."
+                autoFocus
+              />
             </div>
           </div>
-        </>
-      )}
+          <DialogFooter className="flex-row justify-between sm:justify-between">
+            <Button variant="destructive" onClick={handleDialogDelete}>
+              Delete
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={handleDialogEdit}>
+                Edit Shape
+              </Button>
+              <Button onClick={handleDialogSave}>
+                Save
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
