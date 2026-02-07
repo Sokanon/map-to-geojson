@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     poppler-utils \
     tesseract-ocr \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
