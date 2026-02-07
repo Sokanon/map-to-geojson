@@ -11,7 +11,9 @@ export default defineConfig({
     }
   },
   server: {
+    host: true,
     port: 3000,
+    allowedHosts: ['geojson.gamified.studio'],
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
