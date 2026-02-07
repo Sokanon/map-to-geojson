@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { Unit } from '../types';
+import { getCollectionsFromUnits } from '../utils/collections';
 
 interface DigitizerState {
   imageData: string | null;
@@ -14,6 +15,7 @@ interface DigitizerState {
   units: Unit[];
   nextId: number;
   highlightedUnitId: number | null;
+  editingUnitId: number | null;
   // Selection state
   selectedUnitIds: Set<number>;
   lastSelectedId: number | null;
@@ -44,6 +46,7 @@ interface DigitizerActions {
   updateCollection: (id: number, collection: string | undefined) => void;
   getCollections: () => string[];
   setHighlightedUnit: (id: number | null) => void;
+  setEditingUnitId: (id: number | null) => void;
   importUnits: (units: Unit[]) => void;
   clearAll: () => void;
   reset: () => void;
@@ -76,6 +79,7 @@ const initialState: DigitizerState = {
   units: [],
   nextId: 1,
   highlightedUnitId: null,
+  editingUnitId: null,
   selectedUnitIds: new Set<number>(),
   lastSelectedId: null,
   selectedUnitOrder: [],
@@ -93,6 +97,7 @@ export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set,
       imageHeight: height,
       units: [],
       nextId: 1,
+      editingUnitId: null,
     });
   },
 
@@ -165,6 +170,7 @@ export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set,
         selectedUnitIds: newSelected,
         lastSelectedId: state.lastSelectedId === id ? null : state.lastSelectedId,
         selectedUnitOrder: newOrder,
+        editingUnitId: state.editingUnitId === id ? null : state.editingUnitId,
       };
     });
   },
@@ -194,18 +200,15 @@ export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set,
   },
 
   getCollections: () => {
-    const { units } = get();
-    const collections = new Set<string>();
-    for (const unit of units) {
-      if (unit.collection) {
-        collections.add(unit.collection);
-      }
-    }
-    return Array.from(collections).sort();
+    return getCollectionsFromUnits(get().units);
   },
 
   setHighlightedUnit: (id: number | null) => {
     set({ highlightedUnitId: id });
+  },
+
+  setEditingUnitId: (id: number | null) => {
+    set({ editingUnitId: id });
   },
 
   importUnits: (importedUnits: Unit[]) => {
@@ -232,6 +235,7 @@ export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set,
       selectedUnitOrder: [],
       collectionFilter: null,
       targetCollection: null,
+      editingUnitId: null,
     });
   },
 
@@ -341,6 +345,7 @@ export const useDigitizerStore = create<DigitizerState & DigitizerActions>((set,
       selectedUnitIds: new Set<number>(),
       lastSelectedId: null,
       selectedUnitOrder: [],
+      editingUnitId: null,
     }));
   },
 

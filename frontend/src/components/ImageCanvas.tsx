@@ -1,55 +1,26 @@
-import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { ZoomIn, ZoomOut, RotateCcw, Upload, Folder, Trash2, SlidersHorizontal, X, Pencil, MousePointer2, Wand2, TextCursorInput } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { useEffect, useRef, useCallback, useState, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 import { useDigitizerStore } from '../stores/digitizerStore';
 import { magicWandSelect } from '../api/digitizer';
 import { Unit } from '../types';
 import { getCollectionColor, getCollectionFillColor } from '../utils/collectionColors';
-import Toolbar from './Toolbar';
+import { closeRing, getVerticesCentroid, pointInPolygon, stripClosingPoint } from '../utils/geometry';
+import { getCollectionsFromUnits } from '../utils/collections';
+import { useDuplicateLabels } from '../hooks/useDuplicateLabels';
+import { loadImageSize, readFileAsDataUrl } from '../utils/file';
+import CanvasActionBar from './CanvasActionBar';
+import CanvasEditToolbar from './CanvasEditToolbar';
+import CanvasZoomControls from './CanvasZoomControls';
+import CanvasHelpHint from './CanvasHelpHint';
+import CanvasRenameDialogs from './CanvasRenameDialogs';
+import CanvasDeleteDialog from './CanvasDeleteDialog';
+import CanvasEmptyState from './CanvasEmptyState';
 
-// Point-in-polygon test using ray casting algorithm
-function pointInPolygon(x: number, y: number, polygon: number[][]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i][0], yi = polygon[i][1];
-    const xj = polygon[j][0], yj = polygon[j][1];
-    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
-      inside = !inside;
-    }
-  }
-  return inside;
+export interface CanvasApi {
+  focusOnUnit: (unitId: number) => void;
 }
 
-function ImageCanvas() {
+const ImageCanvas = forwardRef<CanvasApi>(function ImageCanvas(_props, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -68,7 +39,6 @@ function ImageCanvas() {
   const [activeTool, setActiveTool] = useState<'select' | 'wand'>('select');
 
   // Edit mode state
-  const [editingUnitId, setEditingUnitId] = useState<number | null>(null);
   const [editingVertices, setEditingVertices] = useState<number[][]>([]);
   const [draggingVertex, setDraggingVertex] = useState<number | null>(null);
   const [dragCoords, setDragCoords] = useState<{ x: number; y: number } | null>(null);
@@ -98,11 +68,13 @@ function ImageCanvas() {
     aiModel,
     units,
     highlightedUnitId,
+    editingUnitId,
     selectedUnitIds,
     selectedUnitOrder,
-    getCollections,
     targetCollection,
     setTargetCollection,
+    setEditingUnitId,
+    setImage,
     addLoadingUnit,
     updateUnitFromResponse,
     removeUnit,
@@ -115,24 +87,11 @@ function ImageCanvas() {
     bulkRename,
   } = useDigitizerStore();
 
-  const collections = getCollections();
+  const collections = useMemo(() => getCollectionsFromUnits(units), [units]);
   const selectedCount = selectedUnitIds.size;
   const totalCount = units.filter((u) => !u.loading).length;
   const orderedSelectedIds = selectedUnitOrder.filter((id) => selectedUnitIds.has(id));
-  const duplicateLabelSet = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const unit of units) {
-      if (unit.loading) continue;
-      const key = unit.label.trim();
-      if (!key) continue;
-      counts.set(key, (counts.get(key) || 0) + 1);
-    }
-    const dupes = new Set<string>();
-    for (const [key, count] of counts) {
-      if (count > 1) dupes.add(key);
-    }
-    return dupes;
-  }, [units]);
+  const duplicateLabelSet = useDuplicateLabels(units);
 
   // Draw the canvas
   const draw = useCallback(() => {
@@ -345,7 +304,7 @@ function ImageCanvas() {
     setZoom(1);
     setOffset({ x: 0, y: 0 });
     setEditingUnitId(null);
-  }, [imageData]);
+  }, [imageData, setEditingUnitId]);
 
   // Animate pulse for loading indicators
   const hasLoadingUnits = units.some(u => u.loading);
@@ -500,7 +459,7 @@ function ImageCanvas() {
         setIsHoveringUnit(hoveredUnit !== null);
       }
     }
-  }, [isPanning, draggingVertex, editingUnitId, getCanvasCoords, findUnitAtPoint, isBoxSelecting]);
+  }, [isPanning, draggingVertex, editingUnitId, getCanvasCoords, findUnitAtPoint, isBoxSelecting, boxStart]);
 
   // Handle mouse up
   const handleMouseUp = useCallback(() => {
@@ -642,30 +601,34 @@ function ImageCanvas() {
     [imageData, useBoundaryMode, boundaryColor, boundaryTolerance, tolerance, ocrEngine, aiModel, editingUnitId, editingVertices, getCanvasCoords, findVertexNear, findUnitAtPoint, addLoadingUnit, updateUnitFromResponse, removeUnit, selectUnit, selectUnitsBatch, units, activeTool]
   );
 
-  // Start editing a unit
-  const startEditing = useCallback((unitId: number) => {
-    const unit = units.find(u => u.id === unitId);
-    if (unit && unit.polygon[0]) {
-      // Remove closing point if present (same as first)
-      const ring = unit.polygon[0];
-      const vertices = ring.slice(0, -1).map(v => [...v]);
-      setEditingVertices(vertices);
-      setEditingUnitId(unitId);
+  // Sync editing vertices when editing target changes
+  useEffect(() => {
+    if (editingUnitId === null) {
+      setEditingVertices([]);
+      return;
     }
-  }, [units]);
+    const unit = units.find(u => u.id === editingUnitId);
+    if (unit && unit.polygon[0]) {
+      const ring = unit.polygon[0];
+      const vertices = stripClosingPoint(ring).map(v => [...v]);
+      setEditingVertices(vertices);
+      return;
+    }
+    setEditingVertices([]);
+  }, [editingUnitId, units]);
 
   // Save edited polygon
   const saveEditing = useCallback(() => {
     if (editingUnitId === null) return;
 
-    // Close the polygon
-    const closedVertices = [...editingVertices, editingVertices[0]];
-
-    // Calculate new centroid
-    const cx = editingVertices.reduce((sum, v) => sum + v[0], 0) / editingVertices.length;
-    const cy = editingVertices.reduce((sum, v) => sum + v[1], 0) / editingVertices.length;
+    if (editingVertices.length < 3) {
+      toast.error('Polygon must have at least 3 points');
+      return;
+    }
 
     const unit = units.find(u => u.id === editingUnitId);
+    const closedVertices = closeRing(editingVertices);
+    const [cx, cy] = getVerticesCentroid(editingVertices);
     updateUnit(editingUnitId, {
       polygon: [closedVertices],
       centroid: [cx, cy] as [number, number],
@@ -674,13 +637,13 @@ function ImageCanvas() {
     setEditingUnitId(null);
     setEditingVertices([]);
     toast.success('Polygon updated', { description: unit?.label || `Unit #${editingUnitId}` });
-  }, [editingUnitId, editingVertices, units, updateUnit]);
+  }, [editingUnitId, editingVertices, units, updateUnit, setEditingUnitId]);
 
   // Cancel editing
   const cancelEditing = useCallback(() => {
     setEditingUnitId(null);
     setEditingVertices([]);
-  }, []);
+  }, [setEditingUnitId]);
 
   // Dialog handlers
   // Dialog handlers removed; selection now drives actions via the bottom bar.
@@ -688,7 +651,7 @@ function ImageCanvas() {
   const handleBulkDeleteSelected = useCallback(() => {
     if (selectedCount === 0) return;
     setDeleteDialogOpen(true);
-  }, [selectedCount, bulkDelete]);
+  }, [selectedCount]);
 
   const handleBulkAssignCollection = useCallback((value: string) => {
     if (value === '__clear__') {
@@ -704,6 +667,17 @@ function ImageCanvas() {
     }
     bulkUpdateCollection(value);
   }, [bulkUpdateCollection]);
+
+  const handleEditSelected = useCallback(() => {
+    if (editingUnitId !== null) return;
+    if (orderedSelectedIds.length === 0) return;
+    setEditingUnitId(orderedSelectedIds[0]);
+  }, [editingUnitId, orderedSelectedIds, setEditingUnitId]);
+
+  const handleCreateTargetCollection = useCallback(() => {
+    const name = prompt('Enter new collection name:');
+    if (name?.trim()) setTargetCollection(name.trim());
+  }, [setTargetCollection]);
 
   const renamePreview = useMemo(() => {
     if (orderedSelectedIds.length === 0) return [];
@@ -774,11 +748,7 @@ function ImageCanvas() {
     setOffset({ x: offsetX, y: offsetY });
   }, [units, zoom]);
 
-  // Expose edit functions via window for UnitList to access
-  useEffect(() => {
-    (window as any).__canvasEditFns = { startEditing, saveEditing, cancelEditing, focusOnUnit, editingUnitId };
-    return () => { delete (window as any).__canvasEditFns; };
-  }, [startEditing, saveEditing, cancelEditing, focusOnUnit, editingUnitId]);
+  useImperativeHandle(ref, () => ({ focusOnUnit }), [focusOnUnit]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -810,7 +780,7 @@ function ImageCanvas() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedUnitIds, selectNone, handleOpenRename]);
+  }, [selectedUnitIds, selectNone, handleOpenRename, setDeleteDialogOpen]);
 
   // Zoom controls
   const handleZoomIn = useCallback(() => {
@@ -829,19 +799,18 @@ function ImageCanvas() {
   // Upload state for drag and drop
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { setImage } = useDigitizerStore();
 
   const processFile = useCallback((file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const result = e.target?.result as string;
-      const img = new Image();
-      img.onload = () => {
-        setImage(result, img.width, img.height);
-      };
-      img.src = result;
-    };
-    reader.readAsDataURL(file);
+    (async () => {
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        const { width, height } = await loadImageSize(dataUrl);
+        setImage(dataUrl, width, height);
+      } catch (err) {
+        toast.error('Failed to load image');
+        console.error(err);
+      }
+    })();
   }, [setImage]);
 
   const handleFileDrop = useCallback((e: React.DragEvent) => {
@@ -878,35 +847,15 @@ function ImageCanvas() {
 
   if (!imageData) {
     return (
-      <div
-        className={cn(
-          "flex flex-col items-center justify-center h-full w-full text-muted-foreground gap-6 cursor-pointer transition-all",
-          isDragging && "bg-primary/10"
-        )}
+      <CanvasEmptyState
+        isDragging={isDragging}
         onClick={handleUploadClick}
         onDrop={handleFileDrop}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
-      >
-        <div className={cn(
-          "flex flex-col items-center gap-4 p-12 rounded-xl border-2 border-dashed transition-colors",
-          isDragging ? "border-primary bg-primary/5" : "border-border"
-        )}>
-          <Upload className={cn("w-16 h-16 transition-colors", isDragging ? "text-primary" : "text-muted-foreground/50")} />
-          <div className="text-center">
-            <p className="text-lg font-medium text-foreground">Drop your map image here</p>
-            <p className="text-sm mt-1">or click to browse</p>
-            <p className="text-xs mt-3 text-muted-foreground/70">Supports PNG, JPG</p>
-          </div>
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          accept="image/png,image/jpeg,image/jpg"
-          onChange={handleFileInputChange}
-        />
-      </div>
+        onFileChange={handleFileInputChange}
+        fileInputRef={fileInputRef}
+      />
     );
   }
 
@@ -938,383 +887,70 @@ function ImageCanvas() {
         }}
       />
 
-      {/* Floating action bar */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
-        <TooltipProvider delayDuration={200}>
-          <div className="flex items-center gap-2 px-3 py-2 rounded-2xl border border-white/10 bg-background/70 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.25)]">
-            <div className="flex items-center gap-1 pr-2 border-r border-white/10">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => setActiveTool('select')}
-                    className={cn(
-                      "h-7 w-7 transition-colors",
-                      activeTool === 'select' ? "bg-primary/15 text-primary" : "hover:bg-primary/10 hover:text-primary"
-                    )}
-                  >
-                    <MousePointer2 className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Select</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => setActiveTool('wand')}
-                    className={cn(
-                      "h-7 w-7 transition-colors",
-                      activeTool === 'wand' ? "bg-primary/15 text-primary" : "hover:bg-primary/10 hover:text-primary"
-                    )}
-                  >
-                    <Wand2 className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Magic wand</TooltipContent>
-              </Tooltip>
-            </div>
-          {selectedCount > 0 && (
-            <div className="flex items-center gap-2 pr-2 border-r border-white/10">
-              <span className="text-[0.65rem] uppercase tracking-wide text-muted-foreground">Selection</span>
-              <span className="text-xs font-medium">
-                {selectedCount}/{totalCount}
-              </span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={selectNone}
-                    className="h-7 w-7"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Clear selection</TooltipContent>
-              </Tooltip>
+      <CanvasActionBar
+        activeTool={activeTool}
+        onToolChange={setActiveTool}
+        selectedCount={selectedCount}
+        totalCount={totalCount}
+        collections={collections}
+        targetCollection={targetCollection}
+        onTargetCollectionChange={setTargetCollection}
+        onCreateTargetCollection={handleCreateTargetCollection}
+        onAssignCollection={handleBulkAssignCollection}
+        onClearSelection={selectNone}
+        onEditSelected={handleEditSelected}
+        onRenameSelected={handleOpenRename}
+        onDeleteSelected={handleBulkDeleteSelected}
+      />
 
-              <DropdownMenu>
-                <Tooltip>
-                  <DropdownMenuTrigger asChild>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="h-7 w-7 hover:text-primary hover:bg-primary/10 transition-colors"
-                      >
-                        <Folder className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                  </DropdownMenuTrigger>
-                  <TooltipContent>Assign collection</TooltipContent>
-                </Tooltip>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuItem onClick={() => handleBulkAssignCollection('__clear__')}>
-                    Clear collection
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleBulkAssignCollection('__new__')}>
-                    New collection...
-                  </DropdownMenuItem>
-                  {collections.length > 0 && <DropdownMenuSeparator />}
-                  {collections.map((c) => (
-                    <DropdownMenuItem key={c} onClick={() => handleBulkAssignCollection(c)}>
-                      <span className="flex items-center gap-2">
-                        <Folder className="h-3.5 w-3.5" style={{ color: getCollectionColor(c) }} />
-                        {c}
-                      </span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+      <CanvasEditToolbar
+        isEditing={editingUnitId !== null}
+        onSave={saveEditing}
+        onCancel={cancelEditing}
+      />
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => orderedSelectedIds[0] && startEditing(orderedSelectedIds[0])}
-                    className="h-7 w-7 hover:text-amber-500 hover:bg-amber-500/10 transition-colors"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Edit polygon</TooltipContent>
-              </Tooltip>
+      <CanvasZoomControls
+        zoom={zoom}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onReset={handleZoomReset}
+      />
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={handleOpenRename}
-                    className="h-7 w-7 hover:text-primary hover:bg-primary/10 transition-colors"
-                  >
-                    <TextCursorInput className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Rename</TooltipContent>
-              </Tooltip>
+      <CanvasHelpHint />
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={handleBulkDeleteSelected}
-                    className="h-7 w-7 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Delete selected</TooltipContent>
-              </Tooltip>
-            </div>
-          )}
+      <CanvasRenameDialogs
+        renameSingleOpen={renameSingleOpen}
+        onRenameSingleOpenChange={setRenameSingleOpen}
+        renameSingleValue={renameSingleValue}
+        onRenameSingleValueChange={setRenameSingleValue}
+        onRenameSingleApply={handleRenameSingleApply}
+        renameSequenceOpen={renameDialogOpen}
+        onRenameSequenceOpenChange={setRenameDialogOpen}
+        renamePrefix={renamePrefix}
+        onRenamePrefixChange={setRenamePrefix}
+        renameStartNumber={renameStartNumber}
+        onRenameStartNumberChange={setRenameStartNumber}
+        renameDirection={renameDirection}
+        onRenameDirectionChange={setRenameDirection}
+        renameError={renameError}
+        renamePreview={renamePreview}
+        onRenameSequenceApply={handleBulkRenameSequence}
+      />
 
-          <div className="flex items-center gap-2 pr-2 border-r border-white/10">
-            <span className="text-[0.65rem] uppercase tracking-wide text-muted-foreground">New items</span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs px-2">
-                  <Folder className="h-3 w-3" style={{ color: getCollectionColor(targetCollection || undefined) }} />
-                  {targetCollection || 'Uncategorized'}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem onClick={() => setTargetCollection(null)}>
-                  Uncategorized
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    const name = prompt('Enter new collection name:');
-                    if (name?.trim()) setTargetCollection(name.trim());
-                  }}
-                >
-                  New collection...
-                </DropdownMenuItem>
-                {collections.length > 0 && <DropdownMenuSeparator />}
-                {collections.map((c) => (
-                  <DropdownMenuItem key={c} onClick={() => setTargetCollection(c)}>
-                    <span className="flex items-center gap-2">
-                      <Folder className="h-3.5 w-3.5" style={{ color: getCollectionColor(c) }} />
-                      {c}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-
-          <div className="flex items-center gap-1 pr-2 border-r border-white/10">
-            <Popover>
-              <Tooltip>
-                <PopoverTrigger asChild>
-                  <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon-sm" className="h-7 w-7">
-                      <SlidersHorizontal className="h-3.5 w-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                </PopoverTrigger>
-                <TooltipContent>Tools</TooltipContent>
-              </Tooltip>
-              <PopoverContent align="center" className="w-72 p-3">
-                <Toolbar />
-              </PopoverContent>
-            </Popover>
-          </div>
-
-          <div className="flex items-center gap-1" />
-          </div>
-        </TooltipProvider>
-      </div>
-
-      {/* Edit mode toolbar */}
-      {editingUnitId !== null && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-background/70 backdrop-blur-md px-4 py-3 rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.25)] flex items-center gap-4 text-sm text-warning z-50 border border-white/10">
-          <span>Editing polygon - drag vertices to adjust</span>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={saveEditing}>Save</Button>
-            <Button size="sm" variant="secondary" onClick={cancelEditing}>Cancel</Button>
-          </div>
-        </div>
-      )}
-
-      {/* Zoom controls */}
-      <div className="absolute bottom-4 right-4 flex items-center gap-2 bg-background/70 backdrop-blur-md p-2 rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.25)] border border-white/10">
-        <Button
-          variant="secondary"
-          size="icon"
-          className="h-8 w-8"
-          onClick={handleZoomIn}
-          title="Zoom in"
-        >
-          <ZoomIn className="h-4 w-4" />
-        </Button>
-        <span className="text-xs text-muted-foreground min-w-10 text-center">
-          {Math.round(zoom * 100)}%
-        </span>
-        <Button
-          variant="secondary"
-          size="icon"
-          className="h-8 w-8"
-          onClick={handleZoomOut}
-          title="Zoom out"
-        >
-          <ZoomOut className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="secondary"
-          size="icon"
-          className="h-8 w-8"
-          onClick={handleZoomReset}
-          title="Reset view"
-        >
-          <RotateCcw className="h-4 w-4" />
-        </Button>
-      </div>
-
-      {/* Help text */}
-      <div className="absolute bottom-4 left-4 text-[0.7rem] text-muted-foreground bg-background/70 backdrop-blur-md px-2.5 py-1.5 rounded-2xl border border-white/10 shadow-[0_8px_30px_rgba(0,0,0,0.2)]">
-        Scroll to zoom | Middle-click drag to pan
-      </div>
-
-      <Dialog open={renameSingleOpen} onOpenChange={setRenameSingleOpen}>
-        <DialogContent
-          className="sm:max-w-[420px] pointer-events-auto z-[60]"
-          onPointerDownCapture={(e) => e.stopPropagation()}
-          data-rename-dialog
-        >
-          <DialogHeader>
-            <DialogTitle>Rename polygon</DialogTitle>
-            <DialogDescription>
-              Update the label for the selected polygon.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-2">
-            <label className="text-xs text-muted-foreground">Name</label>
-            <input
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-              value={renameSingleValue}
-              onChange={(e) => setRenameSingleValue(e.target.value)}
-              placeholder="Enter name"
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setRenameSingleOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleRenameSingleApply} disabled={!renameSingleValue.trim()}>
-              Rename
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
-        <DialogContent
-          className="sm:max-w-[520px] pointer-events-auto z-[60]"
-          onPointerDownCapture={(e) => e.stopPropagation()}
-          data-rename-dialog
-        >
-          <DialogHeader>
-            <DialogTitle>Smart rename</DialogTitle>
-            <DialogDescription>
-              Apply a sequence name in the order you selected polygons.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Prefix</label>
-                <input
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={renamePrefix}
-                  onChange={(e) => setRenamePrefix(e.target.value)}
-                  placeholder="e.g. 19-"
-                  autoFocus
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Starting number</label>
-                <input
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={renameStartNumber}
-                  onChange={(e) => setRenameStartNumber(e.target.value)}
-                  placeholder="e.g. 002"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground">Direction</label>
-                <select
-                  className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-                  value={renameDirection}
-                  onChange={(e) => setRenameDirection(e.target.value as 'asc' | 'desc')}
-                >
-                  <option value="asc">Ascending</option>
-                  <option value="desc">Descending</option>
-                </select>
-              </div>
-              {renameError && (
-                <span className="text-[0.7rem] text-destructive col-span-3">{renameError}</span>
-              )}
-            </div>
-            <div className="rounded-md border border-white/10 bg-background/50">
-              <div className="px-3 py-2 text-[0.7rem] uppercase text-muted-foreground border-b border-white/10">
-                Preview ({renamePreview.length})
-              </div>
-              <div className="max-h-48 overflow-y-auto custom-scrollbar">
-                {renamePreview.length === 0 ? (
-                  <div className="px-3 py-3 text-sm text-muted-foreground">No preview yet.</div>
-                ) : (
-                  renamePreview.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between px-3 py-2 text-sm border-b border-white/5 last:border-b-0">
-                      <span className="truncate text-muted-foreground">{r.from || `#${r.id}`}</span>
-                      <span className="ml-4 font-medium">{r.to}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setRenameDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleBulkRenameSequence} disabled={!!renameError || renamePreview.length === 0}>
-              Apply rename
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent className="pointer-events-auto z-[60]" onPointerDownCapture={(e) => e.stopPropagation()}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete selected polygons?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete {selectedCount} selected polygon{selectedCount === 1 ? '' : 's'}.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                bulkDelete();
-                setDeleteDialogOpen(false);
-              }}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <CanvasDeleteDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        selectedCount={selectedCount}
+        onConfirm={() => {
+          bulkDelete();
+          setDeleteDialogOpen(false);
+        }}
+      />
 
     </div>
   );
-}
+});
+
+ImageCanvas.displayName = 'ImageCanvas';
 
 export default ImageCanvas;

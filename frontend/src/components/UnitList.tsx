@@ -13,16 +13,23 @@ import {
 import { cn } from '@/lib/utils';
 import { useDigitizerStore } from '../stores/digitizerStore';
 import { getCollectionColor } from '../utils/collectionColors';
+import { getCollectionCounts, getCollectionsFromUnits, UNCATEGORIZED_KEY } from '../utils/collections';
+import { useDuplicateLabels } from '../hooks/useDuplicateLabels';
 
-function UnitList() {
+interface UnitListProps {
+  onFocusUnit?: (id: number) => void;
+}
+
+function UnitList({ onFocusUnit }: UnitListProps) {
   const {
     units,
     highlightedUnitId,
     setHighlightedUnit,
+    editingUnitId,
+    setEditingUnitId,
     removeUnit,
     updateLabel,
     updateCollection,
-    getCollections,
     // Selection
     selectedUnitIds,
     // Filter
@@ -52,37 +59,11 @@ function UnitList() {
     [filteredUnits]
   );
 
-  const duplicateLabelSet = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const unit of units) {
-      if (unit.loading) continue;
-      const key = unit.label.trim();
-      if (!key) continue;
-      counts.set(key, (counts.get(key) || 0) + 1);
-    }
-    const dupes = new Set<string>();
-    for (const [key, count] of counts) {
-      if (count > 1) dupes.add(key);
-    }
-    return dupes;
-  }, [units]);
-
-  const collections = getCollections();
+  const duplicateLabelSet = useDuplicateLabels(units);
+  const collections = useMemo(() => getCollectionsFromUnits(units), [units]);
 
   // Get counts per collection
-  const collectionCounts = useMemo(() => {
-    const counts: Record<string, number> = { __uncategorized__: 0 };
-    for (const unit of units) {
-      if (!unit.loading) {
-        if (unit.collection) {
-          counts[unit.collection] = (counts[unit.collection] || 0) + 1;
-        } else {
-          counts.__uncategorized__++;
-        }
-      }
-    }
-    return counts;
-  }, [units]);
+  const collectionCounts = useMemo(() => getCollectionCounts(units), [units]);
 
   const handleMouseEnter = useCallback(
     (id: number) => {
@@ -104,19 +85,13 @@ function UnitList() {
   );
 
   const handleEditPolygon = useCallback((id: number) => {
-    const fns = (window as any).__canvasEditFns;
-    if (fns?.startEditing) {
-      fns.startEditing(id);
-    }
+    setEditingUnitId(id);
     setItemMenuOpen(null);
-  }, []);
+  }, [setEditingUnitId]);
 
   const handleFocusUnit = useCallback((id: number) => {
-    const fns = (window as any).__canvasEditFns;
-    if (fns?.focusOnUnit) {
-      fns.focusOnUnit(id);
-    }
-  }, []);
+    onFocusUnit?.(id);
+  }, [onFocusUnit]);
 
   const handleLabelChange = useCallback(
     (id: number, label: string) => {
@@ -157,8 +132,6 @@ function UnitList() {
     setCollectionFilter(trimmed);
   }, [setCollectionFilter]);
 
-  const editingUnitId = (window as any).__canvasEditFns?.editingUnitId;
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
       {/* Header */}
@@ -190,7 +163,7 @@ function UnitList() {
               <span className="flex items-center gap-2">
                 <Folder className="h-3.5 w-3.5" style={{ color: getCollectionColor(undefined) }} />
                 <span>Uncategorized</span>
-                <span className="text-muted-foreground text-xs">{collectionCounts.__uncategorized__}</span>
+                <span className="text-muted-foreground text-xs">{collectionCounts[UNCATEGORIZED_KEY] || 0}</span>
               </span>
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleCreateCollectionFromFilter}>

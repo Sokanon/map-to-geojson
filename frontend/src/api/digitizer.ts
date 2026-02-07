@@ -1,6 +1,6 @@
 import { MagicWandResponse } from '../types';
 
-const API_BASE = '/api';
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 // Convert hex color to RGB array
 function hexToRgb(hex: string): [number, number, number] {
