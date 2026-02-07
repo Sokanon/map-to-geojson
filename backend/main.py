@@ -22,7 +22,7 @@ from shapely.ops import unary_union
 from scipy import ndimage
 import json
 
-from magic_wand import magic_wand_select, mask_to_polygon, refine_mask
+from magic_wand import magic_wand_select, mask_to_polygon, refine_mask, check_overlap
 from ocr_service import (
     extract_text_from_polygon,
     extract_text_with_gemini,
@@ -90,6 +90,7 @@ class MagicWandRequest(BaseModel):
     simplify_tolerance: float = 2.0  # Douglas-Peucker simplification
     ocr_engine: str = "ai"  # "ai" or "tesseract"
     ai_model: str = "google/gemini-2.0-flash-001"  # AI model to use when ocr_engine is "ai"
+    existing_polygons: Optional[List[List[List[List[float]]]]] = None  # Existing polygon coordinates to check for overlap
 
 
 class MagicWandResponse(BaseModel):
@@ -484,6 +485,13 @@ async def magic_wand(request: MagicWandRequest):
             tolerance=request.tolerance
         )
 
+        # Check for selection too large error
+        if bbox.get("error") == "selection_too_large":
+            return MagicWandResponse(
+                success=False,
+                error="Selection too large - the boundary color may not be present in this area. Try adjusting the boundary color or tolerance."
+            )
+
         # Refine the mask
         refined_mask = refine_mask(mask)
 
@@ -495,6 +503,15 @@ async def magic_wand(request: MagicWandRequest):
                 success=False,
                 error="No valid region selected. Try adjusting tolerance or clicking elsewhere."
             )
+
+        # Check for overlap with existing polygons
+        if request.existing_polygons and result["polygon"]:
+            new_ring = result["polygon"][0]  # First ring of the new polygon
+            if check_overlap(new_ring, request.existing_polygons):
+                return MagicWandResponse(
+                    success=False,
+                    error="This area overlaps with an existing selection. Please select a different area."
+                )
 
         # Extract text from inside the polygon using OCR
         ocr_text = ""

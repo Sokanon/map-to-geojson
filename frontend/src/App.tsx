@@ -1,21 +1,18 @@
-import { useState, useCallback, useRef } from 'react';
-import { ChevronDown, Upload, Download, FileJson, ChevronRight } from 'lucide-react';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { useCallback, useRef } from 'react';
+import { ChevronDown, Upload, Download, FileJson, ChevronRight, FileUp, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 import ImageCanvas from './components/ImageCanvas';
-import Toolbar from './components/Toolbar';
 import UnitList from './components/UnitList';
 import { useDigitizerStore } from './stores/digitizerStore';
 import { exportToTopoJSON, exportToGeoJSON, downloadFile } from './utils/topoJsonExport';
 
 function App() {
-  const [configExpanded, setConfigExpanded] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { units, imageData, setImage } = useDigitizerStore();
+  const { units, imageData, setImage, importUnits, clearAll } = useDigitizerStore();
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -40,16 +37,91 @@ function App() {
     fileInputRef.current?.click();
   }, []);
 
+  const handleImportClick = useCallback(() => {
+    importInputRef.current?.click();
+  }, []);
+
+  const handleImportChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        const importedUnits: any[] = [];
+
+        const extractUnit = (feature: any, collectionName?: string) => {
+          if (feature.geometry?.type !== 'Polygon') return null;
+          const coords = feature.geometry.coordinates;
+          const ring = coords[0] || [];
+          const cx = ring.reduce((sum: number, p: number[]) => sum + p[0], 0) / (ring.length || 1);
+          const cy = ring.reduce((sum: number, p: number[]) => sum + p[1], 0) / (ring.length || 1);
+          const collection = feature.properties?.collection ||
+            (collectionName && collectionName !== 'uncategorized' ? collectionName : undefined);
+          return {
+            id: 0,
+            label: feature.properties?.name || feature.properties?.unit || feature.properties?.building || feature.properties?.label || '',
+            polygon: coords,
+            centroid: [cx, cy] as [number, number],
+            collection,
+          };
+        };
+
+        if (json.type === 'FeatureCollection' && Array.isArray(json.features)) {
+          for (const feature of json.features) {
+            const unit = extractUnit(feature);
+            if (unit) importedUnits.push(unit);
+          }
+        } else if (json.type === 'Topology') {
+          const topojson = await import('topojson-client');
+          for (const objectKey of Object.keys(json.objects)) {
+            const geojson = topojson.feature(json, json.objects[objectKey]) as any;
+            if (geojson.type === 'FeatureCollection') {
+              for (const feature of geojson.features) {
+                const unit = extractUnit(feature, objectKey);
+                if (unit) importedUnits.push(unit);
+              }
+            } else if (geojson.type === 'Feature') {
+              const unit = extractUnit(geojson, objectKey);
+              if (unit) importedUnits.push(unit);
+            }
+          }
+        }
+
+        if (importedUnits.length > 0) {
+          importUnits(importedUnits);
+          toast.success('Imported items', { description: `${importedUnits.length} item${importedUnits.length !== 1 ? 's' : ''}` });
+        } else {
+          toast.error('No valid items found');
+        }
+      } catch (err) {
+        toast.error('Failed to parse file');
+        console.error(err);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }, [importUnits]);
+
+  const handleClearAll = useCallback(() => {
+    const count = units.filter(u => !u.loading).length;
+    if (count > 0 && confirm(`Clear all ${count} items?`)) {
+      clearAll();
+      toast.success('Cleared all items');
+    }
+  }, [units, clearAll]);
+
   const handleExportTopoJSON = useCallback(() => {
     const content = exportToTopoJSON(units);
     downloadFile(content, 'units.json');
-    toast.success('Exported TopoJSON', { description: `${units.length} unit${units.length !== 1 ? 's' : ''}` });
+    toast.success('Exported TopoJSON', { description: `${units.length} item${units.length !== 1 ? 's' : ''}` });
   }, [units]);
 
   const handleExportGeoJSON = useCallback(() => {
     const content = exportToGeoJSON(units);
     downloadFile(content, 'units.geojson');
-    toast.success('Exported GeoJSON', { description: `${units.length} unit${units.length !== 1 ? 's' : ''}` });
+    toast.success('Exported GeoJSON', { description: `${units.length} item${units.length !== 1 ? 's' : ''}` });
   }, [units]);
 
   return (
@@ -70,6 +142,23 @@ function App() {
             >
               <Upload className="h-4 w-4 mr-2" />
               Replace Image
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleImportClick}
+            >
+              <FileUp className="h-4 w-4 mr-2" />
+              Import
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearAll}
+              disabled={units.filter(u => !u.loading).length === 0}
+            >
+              <RotateCcw className="h-4 w-4 mr-2" />
+              Reset
             </Button>
             <Popover>
               <PopoverTrigger asChild>
@@ -111,29 +200,17 @@ function App() {
           accept="image/png,image/jpeg,image/jpg"
           onChange={handleFileChange}
         />
+        <input
+          ref={importInputRef}
+          type="file"
+          className="hidden"
+          accept=".json,.geojson,.topojson"
+          onChange={handleImportChange}
+        />
       </header>
 
       <main className="flex-1 flex gap-4 p-4 min-h-0 overflow-hidden">
         <aside className="w-[300px] min-w-[300px] bg-card rounded-lg p-4 flex flex-col gap-4 overflow-hidden max-h-[calc(100vh-100px)] border border-border">
-          <Collapsible open={configExpanded} onOpenChange={setConfigExpanded}>
-            <section className="bg-background rounded-lg p-4 border border-border">
-              <CollapsibleTrigger className="flex items-center justify-between w-full cursor-pointer">
-                <h2 className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">Config</h2>
-                <ChevronDown
-                  className={cn(
-                    "h-3.5 w-3.5 text-muted-foreground transition-transform duration-200",
-                    configExpanded && "rotate-180"
-                  )}
-                />
-              </CollapsibleTrigger>
-              <CollapsibleContent className="collapsible-content">
-                <div className="pt-3">
-                  <Toolbar />
-                </div>
-              </CollapsibleContent>
-            </section>
-          </Collapsible>
-
           <section className="bg-background rounded-lg p-4 border border-border flex-1 min-h-0 flex flex-col overflow-hidden">
             <UnitList />
           </section>

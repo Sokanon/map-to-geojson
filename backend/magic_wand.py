@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from typing import Tuple, Optional, List
 from collections import deque
+from shapely.geometry import Polygon as ShapelyPolygon
 
 
 def magic_wand_select_boundary(
@@ -91,6 +92,17 @@ def magic_wand_select_boundary(
                 continue
 
             queue.append((nx, ny))
+
+    # Check if selection is too large (likely boundary detection failure)
+    selected_pixels = np.sum(result_mask > 0)
+    total_pixels = h * w
+    selection_ratio = selected_pixels / total_pixels
+
+    if selection_ratio > 0.8:
+        return np.zeros((h, w), dtype=np.uint8), {
+            "x": 0, "y": 0, "width": 0, "height": 0,
+            "error": "selection_too_large"
+        }
 
     bbox = {
         "x": int(min_x),
@@ -284,3 +296,42 @@ def refine_mask(mask: np.ndarray) -> np.ndarray:
     refined = cv2.morphologyEx(refined, cv2.MORPH_OPEN, kernel, iterations=1)
 
     return refined
+
+
+def check_overlap(
+    new_polygon: List[List[float]],
+    existing_polygons: List[List[List[List[float]]]]
+) -> bool:
+    """
+    Check if new polygon overlaps with any existing polygon.
+
+    Args:
+        new_polygon: List of [x, y] coordinates for the new polygon ring
+        existing_polygons: List of GeoJSON polygon coordinates (each is [[[x,y], ...]])
+
+    Returns:
+        True if new polygon overlaps with any existing polygon
+    """
+    if not existing_polygons:
+        return False
+
+    try:
+        new_shape = ShapelyPolygon(new_polygon)
+        if not new_shape.is_valid:
+            new_shape = new_shape.buffer(0)  # Fix invalid geometry
+
+        for existing in existing_polygons:
+            if not existing or not existing[0]:
+                continue
+            existing_ring = existing[0]  # First ring of GeoJSON polygon
+            existing_shape = ShapelyPolygon(existing_ring)
+            if not existing_shape.is_valid:
+                existing_shape = existing_shape.buffer(0)
+
+            if new_shape.intersects(existing_shape):
+                return True
+
+        return False
+    except Exception:
+        # If geometry operations fail, allow the selection
+        return False

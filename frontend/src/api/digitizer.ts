@@ -22,6 +22,7 @@ export interface MagicWandOptions {
   tolerance: number;
   ocrEngine: 'tesseract' | 'ai';
   aiModel: string;
+  existingPolygons?: number[][][][]; // Existing polygon coordinates to check for overlap
 }
 
 export async function magicWandSelect(
@@ -46,6 +47,7 @@ export async function magicWandSelect(
       simplify_tolerance: 2.0,
       ocr_engine: options.ocrEngine,
       ai_model: options.aiModel,
+      existing_polygons: options.existingPolygons || null,
     }),
   });
 

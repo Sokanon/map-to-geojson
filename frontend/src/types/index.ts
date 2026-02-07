@@ -5,6 +5,7 @@ export interface Unit {
   label: string;
   polygon: number[][][]; // GeoJSON polygon coordinates
   centroid: [number, number];
+  collection?: string; // Optional collection/group name (null = uncategorized)
   loading?: boolean; // True while API call is in progress
   clickPosition?: [number, number]; // Where user clicked (for loading indicator)
 }
